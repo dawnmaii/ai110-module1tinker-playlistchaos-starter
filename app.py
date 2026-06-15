@@ -17,10 +17,16 @@ def init_state():
     """Initialize Streamlit session state."""
     if "songs" not in st.session_state:
         st.session_state.songs = default_songs()
+    if "profiles" not in st.session_state:
+        st.session_state.profiles = {"Default": dict(DEFAULT_PROFILE)}
+    if "active_profile_name" not in st.session_state:
+        st.session_state.active_profile_name = "Default"
     if "profile" not in st.session_state:
-        st.session_state.profile = dict(DEFAULT_PROFILE)
+        st.session_state.profile = st.session_state.profiles[st.session_state.active_profile_name]
     if "history" not in st.session_state:
         st.session_state.history = []
+    if "form_key" not in st.session_state:
+        st.session_state.form_key = 0
 
 
 def default_songs():
@@ -187,33 +193,44 @@ def profile_sidebar():
     """Render and update the user profile."""
     st.sidebar.header("Mood profile")
 
-    profile = st.session_state.profile
+    profiles = st.session_state.profiles
+    profile_names = list(profiles.keys())
+    current_name = st.session_state.active_profile_name
 
-    profile["name"] = st.sidebar.text_input(
-        "Profile name",
-        value=str(profile.get("name", "")),
+    selected = st.sidebar.selectbox(
+        "Active profile",
+        options=profile_names,
+        index=profile_names.index(current_name),
     )
+    if selected != current_name:
+        st.session_state.active_profile_name = selected
+        st.session_state.profile = profiles[selected]
+        st.rerun()
+
+    profile = st.session_state.profile
 
     col1, col2 = st.sidebar.columns(2)
     with col1:
         profile["hype_min_energy"] = st.sidebar.slider(
-            "Hype min energy",
+            "Hype Energy Threshold",
             min_value=1,
             max_value=10,
             value=int(profile.get("hype_min_energy", 7)),
         )
     with col2:
         profile["chill_max_energy"] = st.sidebar.slider(
-            "Chill max energy",
+            "Chill Energy Threshold",
             min_value=1,
             max_value=10,
             value=int(profile.get("chill_max_energy", 3)),
         )
 
+    genre_options = ["rock", "lofi", "pop", "jazz", "electronic", "ambient", "other"]
+    current_genre = profile.get("favorite_genre", "rock")
     profile["favorite_genre"] = st.sidebar.selectbox(
         "Favorite genre",
-        options=["rock", "lofi", "pop", "jazz", "electronic", "ambient", "other"],
-        index=0,
+        options=genre_options,
+        index=genre_options.index(current_genre) if current_genre in genre_options else 0,
     )
 
     profile["include_mixed"] = st.sidebar.checkbox(
@@ -221,38 +238,63 @@ def profile_sidebar():
         value=bool(profile.get("include_mixed", True)),
     )
 
-    st.sidebar.write("Current profile:", profile["name"])
+    if len(profiles) > 1 and st.sidebar.button("Delete profile"):
+        del profiles[current_name]
+        new_active = list(profiles.keys())[0]
+        st.session_state.active_profile_name = new_active
+        st.session_state.profile = profiles[new_active]
+        st.rerun()
+
+    st.sidebar.divider()
+    st.sidebar.header("Create a new profile")
+    new_name = st.sidebar.text_input("Profile name")
+    if st.sidebar.button("Create profile"):
+        if not new_name:
+            st.sidebar.error("Enter a name for the new profile.")
+        elif new_name in profiles:
+            st.sidebar.error("A profile with that name already exists.")
+        else:
+            new_profile = dict(profile)
+            new_profile["name"] = new_name
+            profiles[new_name] = new_profile
+            st.session_state.active_profile_name = new_name
+            st.session_state.profile = new_profile
+            st.rerun()
 
 
 def add_song_sidebar():
     """Render the Add Song controls in the sidebar."""
     st.sidebar.header("Add a song")
 
-    title = st.sidebar.text_input("Title")
-    artist = st.sidebar.text_input("Artist")
+    k = st.session_state.form_key
+    title = st.sidebar.text_input("Title", key=f"title_{k}")
+    artist = st.sidebar.text_input("Artist", key=f"artist_{k}")
     genre = st.sidebar.selectbox(
         "Genre",
         options=["rock", "lofi", "pop", "jazz", "electronic", "ambient", "other"],
     )
     energy = st.sidebar.slider("Energy", min_value=1, max_value=10, value=5)
-    tags_text = st.sidebar.text_input("Tags (comma separated)")
+    tags_text = st.sidebar.text_input("Tags (comma separated)", key=f"tags_{k}")
 
     if st.sidebar.button("Add to playlist"):
-        raw_tags = [t.strip() for t in tags_text.split(",")]
-        tags = [t for t in raw_tags if t]
-
-        song: Song = {
-            "title": title,
-            "artist": artist,
-            "genre": genre,
-            "energy": energy,
-            "tags": tags,
-        }
-        if title and artist:
+        if not title or not artist or not tags_text.strip():
+            st.sidebar.error("Title, artist, and tags are required.")
+        else:
+            raw_tags = [t.strip() for t in tags_text.split(",")]
+            tags = [t for t in raw_tags if t]
+            song: Song = {
+                "title": title,
+                "artist": artist,
+                "genre": genre,
+                "energy": energy,
+                "tags": tags,
+            }
             normalized = normalize_song(song)
             all_songs = st.session_state.songs[:]
             all_songs.append(normalized)
             st.session_state.songs = all_songs
+            st.session_state.form_key += 1
+            st.rerun()
 
 
 def playlist_tabs(playlists):
@@ -355,7 +397,15 @@ def history_section():
         return
 
     summary = history_summary(history)
-    st.write("Recent picks by mood:", summary)
+    total = sum(summary.values())
+
+    st.subheader("Mood breakdown")
+    col1, col2, col3 = st.columns(3)
+    for mood, col in zip(["Hype", "Chill", "Mixed"], [col1, col2, col3]):
+        count = summary.get(mood, 0)
+        with col:
+            st.metric(mood, count)
+            st.progress(count / total if total > 0 else 0)
 
     show_details = st.checkbox("Show full history")
     if show_details:
