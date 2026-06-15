@@ -1,5 +1,4 @@
 import streamlit as st
-
 from playlist_logic import (
     DEFAULT_PROFILE,
     Song,
@@ -7,10 +6,11 @@ from playlist_logic import (
     compute_playlist_stats,
     history_summary,
     lucky_pick,
-    merge_playlists,
     normalize_song,
     search_songs,
 )
+
+GENRE_OPTIONS = ["rock", "lofi", "pop", "jazz", "electronic", "ambient", "other"]
 
 
 def init_state():
@@ -189,26 +189,15 @@ def default_songs():
     ]
 
 
-def profile_sidebar():
-    """Render and update the user profile."""
-    st.sidebar.header("Mood profile")
+def switch_profile(name):
+    """Set the active profile by name and trigger a rerun."""
+    st.session_state.active_profile_name = name
+    st.session_state.profile = st.session_state.profiles[name]
+    st.rerun()
 
-    profiles = st.session_state.profiles
-    profile_names = list(profiles.keys())
-    current_name = st.session_state.active_profile_name
 
-    selected = st.sidebar.selectbox(
-        "Active profile",
-        options=profile_names,
-        index=profile_names.index(current_name),
-    )
-    if selected != current_name:
-        st.session_state.active_profile_name = selected
-        st.session_state.profile = profiles[selected]
-        st.rerun()
-
-    profile = st.session_state.profile
-
+def render_profile_settings(profile):
+    """Render the sliders and selectors for the active profile."""
     col1, col2 = st.sidebar.columns(2)
     with col1:
         profile["hype_min_energy"] = st.sidebar.slider(
@@ -225,12 +214,11 @@ def profile_sidebar():
             value=int(profile.get("chill_max_energy", 3)),
         )
 
-    genre_options = ["rock", "lofi", "pop", "jazz", "electronic", "ambient", "other"]
     current_genre = profile.get("favorite_genre", "rock")
     profile["favorite_genre"] = st.sidebar.selectbox(
         "Favorite genre",
-        options=genre_options,
-        index=genre_options.index(current_genre) if current_genre in genre_options else 0,
+        options=GENRE_OPTIONS,
+        index=GENRE_OPTIONS.index(current_genre) if current_genre in GENRE_OPTIONS else 0,
     )
 
     profile["include_mixed"] = st.sidebar.checkbox(
@@ -238,13 +226,16 @@ def profile_sidebar():
         value=bool(profile.get("include_mixed", True)),
     )
 
+
+def delete_profile_section(profiles, current_name):
+    """Render the delete button for the active profile."""
     if len(profiles) > 1 and st.sidebar.button("Delete profile"):
         del profiles[current_name]
-        new_active = list(profiles.keys())[0]
-        st.session_state.active_profile_name = new_active
-        st.session_state.profile = profiles[new_active]
-        st.rerun()
+        switch_profile(list(profiles.keys())[0])
 
+
+def create_profile_section(profile, profiles):
+    """Render the create new profile form."""
     st.sidebar.divider()
     st.sidebar.header("Create a new profile")
     new_name = st.sidebar.text_input("Profile name")
@@ -257,9 +248,30 @@ def profile_sidebar():
             new_profile = dict(profile)
             new_profile["name"] = new_name
             profiles[new_name] = new_profile
-            st.session_state.active_profile_name = new_name
-            st.session_state.profile = new_profile
-            st.rerun()
+            switch_profile(new_name)
+
+
+def profile_sidebar():
+    """Render and update the user profile."""
+    st.sidebar.header("Mood profile")
+
+    profiles = st.session_state.profiles
+    profile_names = list(profiles.keys())
+    current_name = st.session_state.active_profile_name
+
+    selected = st.sidebar.selectbox(
+        "Active profile",
+        options=profile_names,
+        index=profile_names.index(current_name),
+    )
+    if selected != current_name:
+        switch_profile(selected)
+
+    profile = st.session_state.profile
+
+    render_profile_settings(profile)
+    delete_profile_section(profiles, current_name)
+    create_profile_section(profile, profiles)
 
 
 def add_song_sidebar():
@@ -271,7 +283,7 @@ def add_song_sidebar():
     artist = st.sidebar.text_input("Artist", key=f"artist_{k}")
     genre = st.sidebar.selectbox(
         "Genre",
-        options=["rock", "lofi", "pop", "jazz", "electronic", "ambient", "other"],
+        options=GENRE_OPTIONS,
     )
     energy = st.sidebar.slider("Energy", min_value=1, max_value=10, value=5)
     tags_text = st.sidebar.text_input("Tags (comma separated)", key=f"tags_{k}")
@@ -290,9 +302,7 @@ def add_song_sidebar():
                 "tags": tags,
             }
             normalized = normalize_song(song)
-            all_songs = st.session_state.songs[:]
-            all_songs.append(normalized)
-            st.session_state.songs = all_songs
+            st.session_state.songs.append(normalized)
             st.session_state.form_key += 1
             st.rerun()
 
@@ -356,9 +366,7 @@ def lucky_section(playlists):
             f"(mood {pick.get('mood', '?')})"
         )
 
-        history = st.session_state.history
-        history.append(pick)
-        st.session_state.history = history
+        st.session_state.history.append(pick)
 
 
 def stats_section(playlists):
@@ -400,8 +408,7 @@ def history_section():
     total = sum(summary.values())
 
     st.subheader("Mood breakdown")
-    col1, col2, col3 = st.columns(3)
-    for mood, col in zip(["Hype", "Chill", "Mixed"], [col1, col2, col3]):
+    for mood, col in zip(["Hype", "Chill", "Mixed"], st.columns(3)):
         count = summary.get(mood, 0)
         with col:
             st.metric(mood, count)
@@ -441,14 +448,13 @@ def main():
     profile = st.session_state.profile
     songs = st.session_state.songs
 
-    base_playlists = build_playlists(songs, profile)
-    merged_playlists = merge_playlists(base_playlists, {})
+    playlists = build_playlists(songs, profile)
 
-    playlist_tabs(merged_playlists)
+    playlist_tabs(playlists)
     st.divider()
-    lucky_section(merged_playlists)
+    lucky_section(playlists)
     st.divider()
-    stats_section(merged_playlists)
+    stats_section(playlists)
     st.divider()
     history_section()
 
